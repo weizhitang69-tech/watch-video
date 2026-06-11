@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>商海通牒 2011</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090a0c;
+      --panel: #14171b;
+      --text: #f5f7fb;
+      --muted: #a8b0bd;
+      --line: #2a3038;
+      --accent: #57c7ff;
+      --control: #20252c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .stage {
+      width: min(100%, 1280px);
+      display: grid;
+      gap: 12px;
+    }
+
+    .topbar {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(18px, 2vw, 26px);
+      font-weight: 650;
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+
+    #status {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      text-align: right;
+      min-width: 96px;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sr-only {
+      width: 1px;
+      height: 1px;
+      position: absolute;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+
+    select {
+      min-width: 82px;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--control);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 0 8px;
+    }
+
+    video {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      max-height: calc(100vh - 98px);
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: block;
+      outline: none;
+    }
+
+    .ready {
+      color: var(--accent);
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 10px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      #status {
+        text-align: left;
+      }
+
+      .controls {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      video {
+        max-height: calc(100vh - 116px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <div class="topbar">
+      <h1>商海通牒 2011</h1>
+      <div class="controls">
+        <label class="sr-only" for="quality">清晰度</label>
+        <select id="quality" aria-label="清晰度" disabled>
+          <option value="-1">自动</option>
+        </select>
+        <div id="status">准备播放</div>
+      </div>
+    </div>
+
+    <video id="player" controls playsinline preload="metadata" crossorigin="anonymous">
+      <track kind="subtitles" srclang="zh" label="中文字幕" src="./subtitles/zh.vtt" default>
+      <track kind="subtitles" srclang="en" label="English" src="./subtitles/en.vtt">
+    </video>
+  </main>
+
+  <script src="./hls.min.js"></script>
+  <script>
+    const video = document.getElementById("player");
+    const statusEl = document.getElementById("status");
+    const qualitySelect = document.getElementById("quality");
+    const source = "./hls/master.m3u8";
+
+    function setStatus(text, ready = false) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle("ready", ready);
+    }
+
+    function enableDefaultSubtitles() {
+      for (const track of video.textTracks) {
+        track.mode = track.language === "zh" ? "showing" : "disabled";
+      }
+    }
+
+    if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls({
+        backBufferLength: 90,
+        fragLoadingMaxRetry: 8,
+        fragLoadingRetryDelay: 600,
+        fragLoadingMaxRetryTimeout: 12000,
+        maxBufferLength: 90,
+        maxMaxBufferLength: 180,
+        manifestLoadingMaxRetry: 6,
+        manifestLoadingRetryDelay: 600
+      });
+
+      function refreshQualityOptions() {
+        qualitySelect.innerHTML = '<option value="-1">自动</option>';
+        hls.levels.forEach((level, index) => {
+          const option = document.createElement("option");
+          option.value = String(index);
+          option.textContent = `${level.height || "?"}p`;
+          qualitySelect.appendChild(option);
+        });
+        qualitySelect.disabled = hls.levels.length === 0;
+      }
+
+      qualitySelect.addEventListener("change", () => {
+        hls.currentLevel = Number(qualitySelect.value);
+      });
+
+      hls.loadSource(source);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        refreshQualityOptions();
+        setStatus("可以播放", true);
+        enableDefaultSubtitles();
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        if (hls.currentLevel >= 0) {
+          qualitySelect.value = String(data.level);
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) {
+          return;
+        }
+
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          setStatus("网络重试中");
+          hls.startLoad();
+          return;
+        }
+
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          setStatus("播放恢复中");
+          hls.recoverMediaError();
+          return;
+        }
+
+        setStatus("载入失败");
+        hls.destroy();
+      });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = source;
+      video.addEventListener("loadedmetadata", () => {
+        setStatus("可以播放", true);
+        enableDefaultSubtitles();
+      }, { once: true });
+    } else {
+      setStatus("浏览器不支持");
+    }
+  </script>
+</body>
+</html>
