@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Too Big To Fail 2011</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090a0c;
+      --text: #f5f7fb;
+      --muted: #a8b0bd;
+      --line: #2a3038;
+      --accent: #57c7ff;
+      --control: #20252c;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      min-height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+    .stage {
+      width: min(100%, 1280px);
+      display: grid;
+      gap: 12px;
+    }
+    .topbar {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(18px, 2vw, 26px);
+      font-weight: 650;
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #status {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      text-align: right;
+      min-width: 96px;
+    }
+    .sr-only {
+      width: 1px;
+      height: 1px;
+      position: absolute;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+    select {
+      min-width: 82px;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--control);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 0 8px;
+    }
+    video {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      max-height: calc(100vh - 98px);
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: block;
+      outline: none;
+    }
+    .ready { color: var(--accent); }
+    @media (max-width: 640px) {
+      body { padding: 10px; }
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .controls {
+        width: 100%;
+        justify-content: space-between;
+      }
+      #status { text-align: left; }
+      video { max-height: calc(100vh - 116px); }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <div class="topbar">
+      <h1>Too Big To Fail 2011</h1>
+      <div class="controls">
+        <label class="sr-only" for="quality">清晰度</label>
+        <select id="quality" aria-label="清晰度" disabled>
+          <option value="-1">自动</option>
+        </select>
+        <div id="status">准备播放</div>
+      </div>
+    </div>
+    <video id="player" controls playsinline preload="metadata" crossorigin="anonymous">
+      <track kind="subtitles" srclang="zh" label="中文字幕" src="./subtitles/zh-1.vtt" default>
+      <track kind="subtitles" srclang="en" label="English" src="./subtitles/en-2.vtt">
+      <track kind="subtitles" srclang="zh" label="中文字幕" src="./subtitles/zh-3.vtt">
+      <track kind="subtitles" srclang="en" label="English" src="./subtitles/en-4.vtt">
+    </video>
+  </main>
+  <script src="./shaka-player.compiled.min.js"></script>
+  <script src="./hls.min.js"></script>
+  <script>
+    const video = document.getElementById("player");
+    const statusEl = document.getElementById("status");
+    const qualitySelect = document.getElementById("quality");
+    const source = "./hls/master.m3u8";
+    let activeEngine = null;
+
+    function setStatus(text, ready = false) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle("ready", ready);
+    }
+
+    function enableDefaultSubtitles() {
+      let enabled = false;
+      for (const track of video.textTracks) {
+        if (!enabled && track.language === "zh") {
+          track.mode = "showing";
+          enabled = true;
+        } else {
+          track.mode = "disabled";
+        }
+      }
+    }
+
+    function resetQualityOptions() {
+      qualitySelect.innerHTML = '<option value="-1">自动</option>';
+      qualitySelect.disabled = true;
+    }
+
+    function setShakaQualityOptions(player) {
+      resetQualityOptions();
+      const tracks = player.getVariantTracks()
+        .filter((track) => track.height)
+        .sort((a, b) => (a.height || 0) - (b.height || 0));
+      const seen = new Set();
+      for (const track of tracks) {
+        const key = `${track.height}-${track.bandwidth || 0}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const option = document.createElement("option");
+        option.value = String(track.id);
+        option.textContent = `${track.height}p`;
+        qualitySelect.appendChild(option);
+      }
+      qualitySelect.disabled = tracks.length === 0;
+    }
+
+    function setHlsQualityOptions(hls) {
+      resetQualityOptions();
+      hls.levels.forEach((level, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = `${level.height || "?"}p`;
+        qualitySelect.appendChild(option);
+      });
+      qualitySelect.disabled = hls.levels.length === 0;
+    }
+
+    qualitySelect.addEventListener("change", () => {
+      if (!activeEngine) return;
+      const value = qualitySelect.value;
+      if (activeEngine.type === "shaka") {
+        if (value === "-1") {
+          activeEngine.player.configure({ abr: { enabled: true } });
+          return;
+        }
+        const track = activeEngine.player
+          .getVariantTracks()
+          .find((candidate) => String(candidate.id) === value);
+        if (track) {
+          activeEngine.player.configure({ abr: { enabled: false } });
+          activeEngine.player.selectVariantTrack(track, true);
+        }
+        return;
+      }
+      if (activeEngine.type === "hls") {
+        activeEngine.hls.currentLevel = Number(value);
+      }
+    });
+
+    async function startWithShaka() {
+      if (!(window.shaka && shaka.Player && shaka.Player.isBrowserSupported())) {
+        return false;
+      }
+      try {
+        shaka.polyfill.installAll();
+        const player = new shaka.Player();
+        await player.attach(video);
+        activeEngine = { type: "shaka", player };
+        player.addEventListener("error", (event) => {
+          console.warn("Shaka error", event.detail || event);
+          setStatus("播放恢复中");
+        });
+        await player.load(source);
+        setShakaQualityOptions(player);
+        setStatus("可以播放", true);
+        enableDefaultSubtitles();
+        return true;
+      } catch (error) {
+        console.warn("Shaka load failed", error);
+        if (activeEngine && activeEngine.player) {
+          await activeEngine.player.destroy().catch(() => {});
+        }
+        activeEngine = null;
+        resetQualityOptions();
+        return false;
+      }
+    }
+
+    function startWithHls() {
+      if (!(window.Hls && Hls.isSupported())) {
+        return false;
+      }
+      const hls = new Hls({
+        backBufferLength: 90,
+        fragLoadingMaxRetry: 8,
+        fragLoadingRetryDelay: 600,
+        fragLoadingMaxRetryTimeout: 12000,
+        maxBufferLength: 90,
+        maxMaxBufferLength: 180,
+        manifestLoadingMaxRetry: 6,
+        manifestLoadingRetryDelay: 600
+      });
+      activeEngine = { type: "hls", hls };
+      hls.loadSource(source);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setHlsQualityOptions(hls);
+        setStatus("可以播放", true);
+        enableDefaultSubtitles();
+      });
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        if (hls.currentLevel >= 0) {
+          qualitySelect.value = String(data.level);
+        }
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) return;
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          setStatus("网络重试中");
+          hls.startLoad();
+          return;
+        }
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          setStatus("播放恢复中");
+          hls.recoverMediaError();
+          return;
+        }
+        setStatus("播放失败");
+      });
+      return true;
+    }
+
+    function startNativeHls() {
+      if (!video.canPlayType("application/vnd.apple.mpegurl")) {
+        return false;
+      }
+      video.src = source;
+      video.addEventListener("loadedmetadata", () => {
+        setStatus("可以播放", true);
+        enableDefaultSubtitles();
+      });
+      return true;
+    }
+
+    (async () => {
+      resetQualityOptions();
+      if (await startWithShaka()) return;
+      if (startWithHls()) return;
+      if (startNativeHls()) return;
+      setStatus("浏览器不支持 HLS");
+    })();
+  </script>
+</body>
+</html>
